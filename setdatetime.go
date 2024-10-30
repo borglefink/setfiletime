@@ -4,23 +4,56 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"syscall"
 	"time"
 )
 
 // setDateTime sets given date and time on file with given filename
 // if file is not found, the program will abort
-func setDateTime(filename, newdate, newtime string) {
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		fmt.Printf("File [%s] not found.\n", filename)
-		os.Exit(1)
-	}
+func setDateTime(filename, newdate, newtime string, newModifiedTime time.Time) {
+	var newdatetime time.Time
 
-	var newdatetime = getDateTime(newdate, newtime)
+	if newModifiedTime.IsZero() {
+		newdatetime = getDateTime(newdate, newtime)
+	} else {
+		newdatetime = newModifiedTime
+	}
 
 	if err := os.Chtimes(filename, newdatetime, newdatetime); err != nil {
-		fmt.Printf("Could not set datetime [%v] for file [%s].\n", newdatetime, filename)
-		os.Exit(1)
+		exit(fmt.Sprintf("Could not set datetime [%v] for file [%s].\n", newdatetime, filename))
 	}
+
+	if err := setFileCreationTime(filename, newdatetime); err != nil {
+		exit(fmt.Sprintf("Could not set creation datetime [%v] for file [%s].\n", newdatetime, filename))
+	}
+}
+
+// setFileCreationTime sets the creation time of the specified file.
+func setFileCreationTime(path string, creationTime time.Time) error {
+	// Open the file handle with FILE_WRITE_ATTRIBUTES access
+	fileHandle, err := syscall.CreateFile(
+		syscall.StringToUTF16Ptr(path),
+		syscall.FILE_WRITE_ATTRIBUTES,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil,
+		syscall.OPEN_EXISTING,
+		syscall.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		return fmt.Errorf("could not open file: %w", err)
+	}
+	defer syscall.CloseHandle(fileHandle)
+
+	// Convert Go time to Windows FILETIME
+	ft := syscall.NsecToFiletime(creationTime.UnixNano())
+
+	// Set file time attributes
+	err = syscall.SetFileTime(fileHandle, &ft, nil, nil)
+	if err != nil {
+		return fmt.Errorf("could not set file creation time: %w", err)
+	}
+	return nil
 }
 
 // getDateTime returns a time.Time based on given date and time parameters
